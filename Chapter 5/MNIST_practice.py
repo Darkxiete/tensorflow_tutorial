@@ -1,6 +1,14 @@
+# coding=utf8
 import tensorflow as tf
+from tensorflow import keras
+# from tensorflow import examples
 from tensorflow.examples.tutorials.mnist import input_data
-
+"""
+参考这个代码
+https://github.com/tensorflow/tensorflow/blob/master/tensorflow/examples/tutorials/mnist/mnist.py
+代码应该是1.4版本的，但是现在的版本加载mnist数据的API发生了变化，已知的mnist API 变成了
+tf.keras.datasets.mnist.load_data，返回(x_train, y_train), (x_test, y_test)
+"""
 INPUT_NODE = 784
 OUTPUT_NODE = 10
 
@@ -19,7 +27,7 @@ MOVING_AVERAGE_DECAY = 0.99
 
 
 def inference(input_tensor, avg_class, weights_1, biases_1, weights_2, biases_2):
-    # 不适用滑动平均
+    # 不使用滑动平均
     if avg_class:
         layer_1 = tf.nn.relu(tf.matmul(input_tensor, avg_class.average(weights_1)) + biases_1)
         return tf.matmul(layer_1, avg_class.average(weights_2) + biases_2)
@@ -37,19 +45,19 @@ def train(mnist):
     biases_1 = tf.Variable(tf.constant(0.1, shape=[LAYER_NODE]))
 
     weights_2 = tf.Variable(tf.truncated_normal([LAYER_NODE, OUTPUT_NODE], stddev=0.1))
-    biases_2 = tf.Variable(tf.constant(0.1, shape=OUTPUT_NODE))
+    biases_2 = tf.Variable(tf.constant(0.1, shape=[OUTPUT_NODE]))
 
     # 预测值
     y = inference(x, None, weights_1, biases_1, weights_2, biases_2)
 
     # 滑动平均
     # TODO trainable=False 似乎是不求梯度的意思，如果是True的话就会放到一个集合里，那个集合里都会对变量求梯度
-    global_step = tf.constant(0, trainable=False)
+    global_step = tf.Variable(0, trainable=False)
     # 有什么意义
-    variable_average = tf.train.ExponentialMovingAverage(MOVING_AVERAGE_DECAY, global_step)
-    variable_average_op = variable_average.apply(tf.trainable_variables)
+    variables_averages = tf.train.ExponentialMovingAverage(MOVING_AVERAGE_DECAY, global_step)
+    variables_averages_op = variables_averages.apply(tf.trainable_variables())
 
-    average_y = inference(x, variable_average, weights_1, biases_1, weights_2, biases_2)
+    average_y = inference(x, variables_averages, weights_1, biases_1, weights_2, biases_2)
 
     # 交叉熵cross_entropy
     # TODO y 和 y_ 哪个该用tf.argmax?
@@ -62,6 +70,42 @@ def train(mnist):
     learning_rate = tf.train.exponential_decay(LEARNING_RATE_BASE, global_step, mnist.train.num_examples / BATCH_SIZE,
                                                LEARNING_RATE_DECAY)
 
+    train_step = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss, global_step=global_step)
+    with tf.control_dependencies([train_step, variables_averages_op]):
+        train_op = tf.no_op(name="train")
 
-train_step = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss, global_step=global_step)
-with tf.control_dependencies([train_step, varialbes_average_op]):
+    correct_prediction = tf.equal(tf.argmax(average_y, 1), tf.argmax(y, 1))
+    accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+
+    with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+        validate_feed = {
+            x: mnist.validation.images,
+            y_: mnist.validation.labels
+        }
+        test_feed = {
+            x: mnist.test.images,
+            y_: mnist.test.labels
+        }
+        for i in range(TRAINING_STEPS):
+            if i % 1000 == 0:
+                validate_acc = sess.run(accuracy, feed_dict=validate_feed)
+                print("After %d training steps(s), validation accuracy "
+                      "using average model is %g " % (i, validate_acc))
+            xs, ys = mnist.train.next_batch(BATCH_SIZE)
+            sess.run(train_step, feed_dict={x: xs, y_: ys})
+        test_acc = sess.run(accuracy, feed_dict=test_feed)
+        print("After %d training steps(s), test accuracy "
+              "using average model is %g " % (TRAINING_STEPS, test_acc))
+
+
+def main():
+    # (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
+    mnist = input_data.read_data_sets("./data", one_hot=True)
+    train(mnist)
+
+
+if __name__ == "__main__":
+    print(tf.__version__)
+    # TODO 准确率算错了，第1000步是0.093而不是0.93，现在是错误的
+    main()
